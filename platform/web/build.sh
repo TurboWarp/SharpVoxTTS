@@ -54,7 +54,7 @@ rm -rf "$dist"
 mkdir -p "$dist"
 
 # -ffile-prefix-map keeps the checkout path out of the output so builds match.
-em++ -std=c++17 -O2 -Iinclude \
+em++ -std=c++17 -Os -Iinclude \
 	-ffile-prefix-map="$root"=. \
 	-DSHARPVOX_GIT_COMMIT="\"$commit\"" \
 	-fwasm-exceptions \
