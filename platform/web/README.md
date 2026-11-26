@@ -14,14 +14,6 @@ platform/web/build.sh   # or: make web
 
 Output goes to `dist/`: `sharpvox.mjs`, `sharpvox.wasm`, and `SHA256SUMS`.
 
-Building the same commit with the same emsdk version should produce identical
-files. CI builds twice to check this and attests the output, which you can
-verify with:
-
-```sh
-gh attestation verify sharpvox.wasm --repo TurboWarp/SharpVoxTTS
-```
-
 `sv_version()` returns the commit hash the module was built from.
 
 ## Usage
