@@ -6,9 +6,13 @@ import re
 import struct
 
 MAGIC = b"STDK"
-VERSION = 1
-HEADER_SIZE = 128
-HASH_ENTRIES = 27
+VERSION = 2
+HEADER_SIZE = 32
+# Every RESTART_INTERVAL-th entry stores its whole word so lookups can binary
+# search those entries, then step forward through at most this many entries.
+RESTART_INTERVAL = 16
+WORD_END = 0x0A
+PHONS_END = 0xFF
 
 PHONEME_NAMES = {
     0: "IY", 1: "IH", 2: "EH", 3: "AE", 4: "IX", 5: "AX", 6: "ER", 7: "AH",
@@ -68,67 +72,93 @@ def tokens_to_phons(tokens):
     return phons
 
 
+# Stress markers are folded into the vowel that follows them, which makes the
+# phoneme stream about 10% smaller and compress better.
+FOLD_PRIMARY = 64
+FOLD_SECONDARY = 128
+
+
+def fold_stress(phons):
+    folded = []
+    stress = 0
+    for b in phons:
+        if b == STRESS_PRIMARY:
+            stress = FOLD_PRIMARY
+        elif b == STRESS_SECONDARY:
+            stress = FOLD_SECONDARY
+        else:
+            folded.append(b + stress)
+            stress = 0
+    return folded
+
+
+def unfold_stress(folded):
+    phons = []
+    for b in folded:
+        if b >= FOLD_SECONDARY:
+            phons += [STRESS_SECONDARY, b - FOLD_SECONDARY]
+        elif b >= FOLD_PRIMARY:
+            phons += [STRESS_PRIMARY, b - FOLD_PRIMARY]
+        else:
+            phons.append(b)
+    return phons
+
+
 def parse_blob(blob):
     if blob[:4] != MAGIC:
         raise ValueError("bad STDICT magic")
-    word_count = struct.unpack_from("<I", blob, 8)[0]
-    index_off = struct.unpack_from("<I", blob, 16)[0]
+    version, interval, word_count, words_off, words_len, phons_off, phons_len = \
+        struct.unpack_from("<HHIIIII", blob, 4)
+    if version != VERSION:
+        raise ValueError("unsupported STDICT version %d" % version)
     entries = []
-    for i in range(word_count):
-        off = struct.unpack_from("<I", blob, index_off + i * 4)[0]
-        d_len = blob[off]
-        word = blob[off + 1:off + 1 + d_len].decode("ascii")
-        p_off = off + 1 + d_len
-        p_len = blob[p_off]
-        phons = list(blob[p_off + 1:p_off + 1 + p_len])
-        entries.append((word, phons))
+    w = words_off
+    p = phons_off
+    word = b""
+    for _ in range(word_count):
+        prefix = blob[w]
+        end = blob.index(WORD_END, w + 1)
+        word = word[:prefix] + blob[w + 1:end]
+        w = end + 1
+        end = blob.index(PHONS_END, p)
+        entries.append((word.decode("ascii"), unfold_stress(blob[p:end])))
+        p = end + 1
     return entries
 
 
 def build_blob(entries):
     ordered = sorted(entries, key=lambda e: e[0].encode("ascii"))
-    word_count = len(ordered)
 
-    data = bytearray()
-    offsets = []
-    for word, phons in ordered:
+    words = bytearray()
+    phons = bytearray()
+    previous = b""
+    for i, (word, entry_phons) in enumerate(ordered):
         wb = word.encode("ascii")
-        if len(wb) > 255 or len(phons) > 255:
-            raise ValueError("word or phon stream too long: %r" % word)
-        offsets.append(HEADER_SIZE + len(data))
-        data += bytes([len(wb)]) + wb + bytes([len(phons)]) + bytes(phons)
+        if not wb or len(wb) > 255 or WORD_END in wb:
+            raise ValueError("bad word: %r" % word)
+        prefix = 0
+        if i % RESTART_INTERVAL != 0:
+            limit = min(len(previous), len(wb), 255)
+            while prefix < limit and previous[prefix] == wb[prefix]:
+                prefix += 1
+        words += bytes([prefix]) + wb[prefix:] + bytes([WORD_END])
+        previous = wb
 
-    index_off = HEADER_SIZE + len(data)
+        folded = fold_stress(entry_phons)
+        if any(b >= PHONS_END for b in folded) or unfold_stress(folded) != entry_phons:
+            raise ValueError("phonemes don't round trip: %r" % word)
+        phons += bytes(folded) + bytes([PHONS_END])
 
-    first_letters = [w[0] for w, _ in ordered]
-    starts = []
-    for li in range(26):
-        ch = chr(ord("A") + li)
-        lo, hi = 0, word_count
-        while lo < hi:
-            mid = (lo + hi) // 2
-            if first_letters[mid] < ch:
-                lo = mid + 1
-            else:
-                hi = mid
-        starts.append(lo)
-    starts.append(word_count)
+    words_off = HEADER_SIZE
+    phons_off = words_off + len(words)
+    header = MAGIC + struct.pack("<HHIIIII", VERSION, RESTART_INTERVAL, len(ordered),
+                                 words_off, len(words), phons_off, len(phons))
+    header += bytes(HEADER_SIZE - len(header))
 
-    header = bytearray(HEADER_SIZE)
-    header[0:4] = MAGIC
-    struct.pack_into("<H", header, 4, VERSION)
-    struct.pack_into("<H", header, 6, 0)
-    struct.pack_into("<I", header, 8, word_count)
-    struct.pack_into("<I", header, 12, HEADER_SIZE)
-    struct.pack_into("<I", header, 16, index_off)
-    for i, s in enumerate(starts):
-        struct.pack_into("<I", header, 20 + i * 4, s)
-
-    index = bytearray()
-    for off in offsets:
-        index += struct.pack("<I", off)
-
-    return bytes(header) + bytes(data) + bytes(index)
+    blob = header + bytes(words) + bytes(phons)
+    if parse_blob(blob) != ordered:
+        raise ValueError("blob doesn't round trip")
+    return blob
 
 
 CPP_HEADER = (

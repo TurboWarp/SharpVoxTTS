@@ -25,12 +25,22 @@ namespace SharpVox {
 	    private:
 		const uint8_t* _data;
 		int32_t	       _dataLen;
-		int32_t	       _indexOff; // byte offset of the per-word offset table in _data (XIP)
-		uint32_t       _hash[27]; // letter_starts[27]: word index of first entry for A-Z + sentinel
+		int32_t	       _wordCount;
+		int32_t	       _restartInterval;
+		int32_t	       _wordsEnd;
 
-		static constexpr int HASH_ENTRIES = 27;
+		// Built on load: offsets of every _restartInterval-th entry, which
+		// stores its whole word, in the word and phoneme streams.
+		struct Restart {
+			uint32_t word;
+			uint32_t phons;
+		};
+		std::vector<Restart> _restarts;
 
-		int32_t _wordCount;
+		// Reads the entry at wordOff/phonsOff, rebuilding its word in place
+		// from the previous entry's word, then advances both offsets.
+		void		     ReadEntry(int32_t& wordOff, int32_t& phonsOff, std::string& word, int32_t& entryPhonsOff) const;
+		std::vector<uint8_t> UnfoldPhons(int32_t phonsOff) const;
 	};
 
 } // namespace SharpVox
