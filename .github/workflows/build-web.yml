@@ -1,0 +1,52 @@
+name: "Build web"
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: "Build web"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+    - name: Install emsdk
+      run: |
+        version="$(cat platform/web/EMSDK_VERSION)"
+        git clone --depth 1 --branch "$version" https://github.com/emscripten-core/emsdk "$RUNNER_TEMP/emsdk"
+        "$RUNNER_TEMP/emsdk/emsdk" install "$version"
+        "$RUNNER_TEMP/emsdk/emsdk" activate "$version"
+    - name: Build
+      run: |
+        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        platform/web/build.sh
+    - name: Check reproducibility
+      run: |
+        source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+        git clone --quiet . "$RUNNER_TEMP/rebuild"
+        git -C "$RUNNER_TEMP/rebuild" checkout --quiet "$(git rev-parse HEAD)"
+        "$RUNNER_TEMP/rebuild/platform/web/build.sh"
+        diff platform/web/dist/SHA256SUMS "$RUNNER_TEMP/rebuild/platform/web/dist/SHA256SUMS"
+    - name: Attest build provenance
+      if: github.event_name != 'pull_request'
+      uses: actions/attest@v4
+      with:
+        subject-path: |
+          platform/web/dist/sharpvox.mjs
+          platform/web/dist/sharpvox.wasm
+    - name: Upload artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: sharpvox-web
+        path: platform/web/dist/

@@ -85,7 +85,7 @@ EMCCFLAGS := -std=c++17 -O2 -Iinclude -DSHARPVOX_SAMPLED_GLOT -DHAVE_MECAB \
     -sEXPORT_ES6=1 \
     -sENVIRONMENT=web
 
-.PHONY: all cli lib tests timing-probe wasm wasm-host clean
+.PHONY: all cli lib tests timing-probe wasm wasm-host web clean
 
 all: cli lib
 
@@ -133,9 +133,13 @@ wasm:
 wasm-host: wasm
 	python3 -m http.server 8080 --directory platform/wasm/wwwroot
 
+web:
+	platform/web/build.sh
+
 clean:
 	rm -f $(LIB_OBJS) $(CLI_OBJS) $(SHLIB_OBJS) $(CLI_BIN) $(SHLIB) $(ARCHIVE)
 	rm -f $(LIB_OBJS:.o=.d) $(CLI_OBJS:.o=.d) $(SHLIB_OBJS:.o=.d)
 	rm -rf $(FP_BUILD_DIR)
 	rm -f $(WASM_OUT) platform/wasm/wwwroot/js/sharpvox.wasm
 	rm -f $(TIMING_PROBE_BIN)
+	rm -rf platform/web/dist
